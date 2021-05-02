@@ -1,0 +1,242 @@
+---
+title: "BI"
+output: html_notebook
+---
+
+```{r Libraries}
+library("dplyr")
+library("ggplot2")
+library("bayestestR")
+library("usmap")
+```
+
+```{r}
+#Triangle Prior
+get_prior_distr <- function(vals) {
+  vals_pmin <- pmin(vals, 1 - vals)
+  # Normalize the prior so that they sum to 1.
+  tibble::tibble(theta = vals, prior = vals_pmin / sum(vals_pmin)
+  )
+  }
+
+plot_prior_distr <- function(prior_distr_df, plot_x_labels = TRUE) {
+  theta_prior_p <- 
+    prior_distr_df %>%
+    ggplot(aes(x = theta, y = prior)) +
+    geom_point() +
+    geom_segment(aes(x = theta, xend = theta, y = prior, yend = 0)) +
+    xlab(expression(theta)) +
+    ylab(expression(paste("P(", theta, ")"))) +
+    ggtitle("Prior Distribution") 
+
+  if (plot_x_labels) {
+    theta_vals <- prior_distr_df[["theta"]]
+    theta_prior_p <- theta_prior_p + scale_x_continuous(breaks = c(theta_vals), labels = theta_vals)
+  }
+
+  return(theta_prior_p)
+}
+
+get_likelihood_df <- function(theta_vals, num_succss, num_fails) {
+  likelihood.vals <- c()
+  for (cur.theta.val in theta_vals) {
+    likelihood.vals <- 
+      c(likelihood.vals, 
+        (cur.theta.val^num_succss) * (1 - cur.theta.val)^(num_fails))
+  }
+
+  likelihood.vals <- dbinom(num_succss, num_succss + num_fails, theta_vals)
+  likelihood_df <- 
+    tibble::tibble(
+      theta = theta_vals,
+      likelihood = likelihood.vals
+    )
+
+  return(likelihood_df)
+}
+
+get_posterior_df <- function(likelihood_df, prior_distr_df) {
+
+  likelihood_prior_df <- dplyr::left_join(likelihood_df, prior_distr_df, by = "theta")
+
+  marg_likelihood <- likelihood_prior_df %>%dplyr::mutate(likelihood_theta = .data[["likelihood"]] * .data[["prior"]]) %>% dplyr::pull("likelihood_theta") %>%sum()
+
+  posterior_df <- dplyr::mutate(likelihood_prior_df, post_prob = (likelihood * prior) / marg_likelihood)
+
+  return(posterior_df)
+}
+
+
+plot_likelihood_prob_distr <- function(likelihood_df) {
+  likelihood_df %>%
+  ggplot(aes(x = theta, y = likelihood)) +
+  geom_point() +
+  geom_segment(aes(x = theta, xend = theta, y = likelihood, yend = 0)) +
+  xlab(expression(theta)) +
+  ylab(expression(paste("P(D|", theta, ")"))) +
+  ggtitle("Likelihood Distribution")
+}
+
+plot_posterior_prob_distr <- function(posterior_df, theta_vals) {
+  posterior_df %>%
+  ggplot(aes(x = theta, y = post_prob)) +
+  geom_point() +
+  geom_segment(aes(x = theta, xend = theta, y = post_prob, yend = 0)) +
+  xlab(expression(theta)) +
+  ylab(expression(paste("P(", theta, "|D)"))) +
+  ggtitle("Posterior Distribution")
+}
+
+ci <- function(x, px){  # Function created using https://stats.stackexchange.com/questions/240749/how-to-find-95-credible-interval
+
+  xx <- seq(min(x), max(x), by = 0.05)
+
+  # interpolate function from the sample
+  fx <- splinefun(x, px) # interpolating function
+  pxx <- pmax(0, fx(xx)) # normalize so prob >0
+
+  # sample from the "empirical" distribution
+  samp <- sample(xx, 1e5, replace = TRUE, prob = pxx)
+
+  # and take sample quantiles
+  quantile(samp, c(0.025, 0.975)) 
+
+  cpxx <- cumsum(pxx) / sum(pxx)
+  xx[which(cpxx >= 0.025)[1]]   # lower boundary
+  xx[which(cpxx >= 0.975)[1]-1] # upper boundary
+
+  return(c(xx[which(cpxx >= 0.025)[1]],xx[which(cpxx >= 0.975)[1]-1]))   # lower boundary, upper
+
+}
+#Read more about these! http://tinyheero.github.io/2017/03/08/how-to-bayesian-infer-101.html
+```
+
+```{r - Priors}
+theta_vals <- seq(0, 1, 0.05) # Sets the resolution of the distrobution for theta .001 for the prettiest picture, but way more computational power
+theta_prior_distr_df <- get_prior_distr(theta_vals) #Setup the dataframe for prior
+```
+
+```{r}
+likelihood_df <- get_likelihood_df(theta_vals, 0, 10) ## 0 successes, 10 failures
+posterior_df <- get_posterior_df(likelihood_df, theta_prior_distr_df)
+plot_prior_distr(theta_prior_distr_df)
+plot_likelihood_prob_distr(likelihood_df)
+plot_posterior_prob_distr(posterior_df, theta_vals)
+```
+
+```{r}
+testsample <- sample(posterior_df$theta, 1, prob = posterior_df$post_prob, replace=TRUE)
+testsample * 13 
+```
+
+
+```{r}
+posterior_df
+
+ci(posterior_df$theta, posterior_df$post_prob)
+
+```
+
+```{r - Loading in prior election info}
+all = `1976.2016.president` 
+prez1 = subset(all, party == 'democrat' & writein==FALSE & year>=2000 | party == 'republican' & writein==FALSE & year>=2000 | party == 'democratic-farmer-labor' & writein==FALSE & year>=2000)
+prezd = subset(prez1, party == 'democrat' & writein==FALSE | party == 'democratic-farmer-labor' & writein==FALSE)
+prezr = subset(prez1, party == 'republican' & writein==FALSE)
+
+win2000 <- list()
+for (i in 1:255){
+  if (prezr[i,11] < prezd[i,11]) {
+  win2000 <- c(win2000, 1)
+  } else {
+  win2000 <-c(win2000, 0)
+  }
+}
+df <- data.frame(matrix(unlist(win2000), nrow=5, ncol=51, byrow=T))
+dftotal <- colSums(df, na.rm = T)
+dftotal
+```
+
+
+```{r - Actually Working with a list}
+poll_df = `polldata.11.26`
+
+postmaster = list()
+postrange = list()
+
+for (i in 1:nrow(poll_df)){ #Repeat this loop the number of items in my list. Note that it should always be 51 since I have 51 "states"
+ dwin = poll_df[i,2] + dftotal[i] 
+ dloss = poll_df[i,3] + 6 -poll_df[i,2] - dftotal[i]
+ 
+ likelihood_df <- get_likelihood_df(theta_vals, dwin , dloss)
+ posterior_df <- get_posterior_df(likelihood_df, theta_prior_distr_df)
+ 
+ postmastertemp <- data.frame(i, t(sapply(posterior_df[which.max(posterior_df$post_prob),]$theta,c)))
+ postmaster <-rbind(postmaster, postmastertemp)
+
+ #Collecting CIs and rearranging them into a data frame
+ ci_eti<-ci(posterior_df$theta, posterior_df$post_prob)
+ postrangetemp <- data.frame(t(sapply(ci_eti,c)))
+ postrange <-rbind(postrange, postrangetemp)
+}
+colnames(postmaster) <- c("state", "mostlikelytheta")
+colnames(postrange) <- c("low", "high")
+postmaster$state <- statepop$full # giving state numbers their name. Needed only for mapping with usmap
+postrange
+
+```
+
+```{r plotting our data with CI}
+postmaster%>%ggplot(aes(1:51, mostlikelytheta))+
+  geom_point()+
+  geom_errorbar(aes(ymin=postrange$low, ymax=postrange$high), width=.2, position=position_dodge(0.05))+
+  labs(title = "Biden vs. Trump", y = "Biden Chance of Victory", x = "State")
+
+```
+
+
+```{r - Taken largely from https://socviz.co/maps.html}
+plot_usmap(data = postmaster, values = "mostlikelytheta", color = "black") + 
+  scale_fill_gradient(name = "Chance of Biden Win", low = "white", high = "blue")+
+  theme(legend.position = "right")
+```
+
+
+```{r}
+statevote = `statevote`
+colnames(statevote) <- c("state","vote")
+
+postmaster = list()
+postrange = list()
+samplemaster = list()
+for (i in 1:1000){
+  sampletemp2 = list()
+  for (i in 1:nrow(poll_df)){ #Repeat this loop the number of items in my list. Note that it should always be 51 since I have 51 "states"
+    dwin = poll_df[i,2] + dftotal[i] 
+    dloss = poll_df[i,3] + 6 -poll_df[i,2] - dftotal[i]
+ 
+    likelihood_df <- get_likelihood_df(theta_vals, dwin , dloss)
+    posterior_df <- get_posterior_df(likelihood_df, theta_prior_distr_df)
+    sampletemp1 <- statevote$vote[i]*sample(posterior_df$theta, 1, prob = posterior_df$post_prob, replace=TRUE)
+    sampletemp2 <-rbind(sampletemp2, sampletemp1)
+    
+  }
+    
+  samplemaster <- rbind(samplemaster,sum(as.numeric(sampletemp2)))
+}
+```
+
+```{r}
+d <- density(as.numeric(samplemaster))
+plot(d, main = "Probability of Biden Success")
+```
+
+```{r}
+
+mean(as.numeric(samplemaster) > 270)
+
+```
+
+
+
+
+
